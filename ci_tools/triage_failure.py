@@ -417,10 +417,10 @@ Please analyze this CI failure and provide:
 4. **Relevant Code Changes**: If PR-specific, which changes in the diff likely caused it?
 5. **Recommendation**: What should the PR author do next?"""
 
-    # Call Bedrock invoke-model API directly with bearer token
+    # Call Bedrock Converse API directly with bearer token
     url = (
         f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com"
-        f"/model/{BEDROCK_MODEL}/invoke"
+        f"/model/{BEDROCK_MODEL}/converse"
     )
     resp = requests.post(
         url,
@@ -429,17 +429,18 @@ Please analyze this CI failure and provide:
             "Content-Type": "application/json",
         },
         json={
-            "anthropic_version": "bedrock-2023-10-16",
-            "max_tokens": 2048,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_prompt}],
+            "system": [{"text": system_prompt}],
+            "messages": [
+                {"role": "user", "content": [{"text": user_prompt}]},
+            ],
+            "inferenceConfig": {"maxTokens": 2048},
         },
     )
     if not resp.ok:
         print(f"Bedrock API error {resp.status_code}: {resp.text}")
         resp.raise_for_status()
     result = resp.json()
-    return result["content"][0]["text"]
+    return result["output"]["message"]["content"][0]["text"]
 
 
 def format_comment(pr_number, run_info, error_info, analysis, similar_failures):
