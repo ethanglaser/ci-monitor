@@ -27,7 +27,9 @@ HEADERS = {
 MAX_LOG_LINES = 300
 MAX_DIFF_CHARS = 12000
 MAX_SIMILAR_RUNS = 5
-BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-6-v1:0"
+BEDROCK_MODEL = os.environ.get(
+    "BEDROCK_MODEL", "us.anthropic.claude-sonnet-4-20250514-v1:0"
+)
 
 
 def github_get(endpoint, accept=None):
@@ -433,7 +435,9 @@ Please analyze this CI failure and provide:
             "messages": [{"role": "user", "content": user_prompt}],
         },
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        print(f"Bedrock API error {resp.status_code}: {resp.text}")
+        resp.raise_for_status()
     result = resp.json()
     return result["content"][0]["text"]
 
