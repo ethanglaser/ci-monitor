@@ -1,0 +1,52 @@
+#===============================================================================
+# CI Failure Triage Workflow
+#
+# Manually triggered workflow that analyzes failed CI runs for a given PR,
+# checks for similar failures across the repo, and posts an AI-powered
+# triage report as a PR comment.
+#===============================================================================
+
+name: Triage CI Failure
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to triage'
+        required: true
+        type: number
+      repository:
+        description: 'Repository (owner/repo) where the PR lives'
+        required: false
+        type: string
+        default: 'uxlfoundation/scikit-learn-intelex'
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    name: Triage CI failure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run triage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPO: ${{ inputs.repository }}
+        run: python ci_tools/triage_failure.py
