@@ -193,18 +193,18 @@ def _extract_step_section(lines, step_name):
 def _build_snippet(lines):
     """Build an error snippet from log lines by finding error regions."""
     error_patterns = [
-        r"(?i)error[:\s]",
-        r"(?i)failed",
-        r"(?i)traceback",
-        r"(?i)exception",
-        r"(?i)assert(?:ion)?(?:error)?",
-        r"= FAILURES =",
-        r"= ERRORS =",
+        r"error[:\s]",
+        r"failed",
+        r"traceback",
+        r"exception",
+        r"assert(?:ion)?(?:error)?",
+        r"FAILURES =",
+        r"ERRORS =",
         r"short test summary",
-        r"(?i)fatal",
+        r"fatal",
         r"Process completed with exit code [1-9]",
     ]
-    combined_pattern = re.compile("|".join(error_patterns))
+    combined_pattern = re.compile("|".join(error_patterns), re.IGNORECASE)
 
     # Collect error regions (line index + context)
     error_indices = set()
