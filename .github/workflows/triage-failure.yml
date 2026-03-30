@@ -47,6 +47,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+          AZURE_DEVOPS_ORG: ${{ secrets.AZURE_DEVOPS_ORG }}
+          AZURE_DEVOPS_PROJECT: ${{ secrets.AZURE_DEVOPS_PROJECT }}
           PR_NUMBER: ${{ inputs.pr_number }}
           REPO: ${{ inputs.repository }}
-        run: python ci_tools/triage_failure.py
+        run: python -m ci_tools.triage_failure
