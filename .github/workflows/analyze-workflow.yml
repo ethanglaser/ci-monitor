@@ -1,0 +1,56 @@
+#===============================================================================
+# Cross-Branch Workflow Failure Analysis
+#
+# Analyzes a GitHub Actions workflow across all branches to determine
+# if failures are repo-wide or branch-specific.
+#===============================================================================
+
+name: Analyze Workflow Failures
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'Repository (owner/repo)'
+        required: true
+        type: string
+      workflow_file:
+        description: 'Workflow filename (e.g. build-cpp-runtime-bindings.yml)'
+        required: true
+        type: string
+      run_url:
+        description: 'Optional: URL of a specific failed run to anchor analysis'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze workflow failures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run analysis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          REPO: ${{ inputs.repository }}
+          WORKFLOW_FILE: ${{ inputs.workflow_file }}
+          RUN_URL: ${{ inputs.run_url }}
+        run: python -m ci_tools.analyze_workflow
