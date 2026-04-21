@@ -119,7 +119,4 @@ def attribute(failure, error_snippet, repo_commits, upstream_commits, repo, upst
 ---
 {task}
 """
-    try:
-        return call_bedrock(system_prompt, user_prompt, max_tokens=512)
-    except Exception as e:
-        return f"_(attribution failed: {e})_"
+    return call_bedrock(system_prompt, user_prompt, max_tokens=512)

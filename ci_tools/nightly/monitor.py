@@ -43,12 +43,20 @@ def collect_azure_scope(scope):
     return curr_run, prev_run, curr_jobs, prev_jobs
 
 
-def _enrich_failure(job, snippet, repo_commits, upstream_commits, scope):
-    """Attach snippet + commits + LLM verdict to a failing job."""
-    verdict = attribute(
-        job, snippet, repo_commits, upstream_commits,
-        scope["repo"], scope.get("upstream_repo"),
-    )
+def _enrich_failure(job, snippet, repo_commits, upstream_commits, scope, errors):
+    """Attach snippet + commits + LLM verdict to a failing job.
+
+    Attribution failures are caught here (not in attribute() itself) so the
+    email still gets sent, but the run is flagged as errored via `errors`.
+    """
+    try:
+        verdict = attribute(
+            job, snippet, repo_commits, upstream_commits,
+            scope["repo"], scope.get("upstream_repo"),
+        )
+    except Exception as e:
+        errors.append(f"attribution failed for '{job['name']}': {e}")
+        verdict = f"(attribution failed: {e})"
     return {
         "job": job,
         "snippet": snippet,
@@ -58,18 +66,24 @@ def _enrich_failure(job, snippet, repo_commits, upstream_commits, scope):
     }
 
 
-def _fetch_snippet(job):
+def _fetch_snippet(job, errors):
     try:
         log = azure_pipelines.get_job_logs(
             "", job["id"], _log_id=job.get("_log_id")
         )
     except Exception as e:
+        errors.append(f"log fetch failed for '{job['name']}': {e}")
         log = f"(could not fetch log: {e})"
     return extract_error_snippet(log, job.get("failed_step"))
 
 
-def build_report(scope_name, scope, curr_run, prev_run, diff):
-    """Assemble a plain dict that the email renderer consumes."""
+def build_report(scope_name, scope, curr_run, prev_run, diff, errors):
+    """Assemble a plain dict that the email renderer consumes.
+
+    `errors` is a list that collects non-fatal errors encountered during
+    report construction (log fetches, attribution). The caller exits
+    non-zero if it's non-empty.
+    """
     has_any_failure = bool(diff["new_failures"] or diff["still_failing"])
     status = "OK" if not has_any_failure else (
         "REGRESSION" if diff["new_failures"] else "RED"
@@ -106,18 +120,18 @@ def build_report(scope_name, scope, curr_run, prev_run, diff):
         )
 
     for job in diff["new_failures"]:
-        snippet = _fetch_snippet(job)
+        snippet = _fetch_snippet(job, errors)
         report["new_failures"].append(
             _enrich_failure(job, snippet, repo_commits_narrow,
-                            upstream_commits_narrow, scope)
+                            upstream_commits_narrow, scope, errors)
         )
 
     # For chronic failures we skip the commit list (we don't know when it
     # last passed) and just summarize what's broken.
     for job in diff["still_failing"]:
-        snippet = _fetch_snippet(job)
+        snippet = _fetch_snippet(job, errors)
         report["still_failing"].append(
-            _enrich_failure(job, snippet, [], [], scope)
+            _enrich_failure(job, snippet, [], [], scope, errors)
         )
 
     return report
@@ -171,7 +185,8 @@ def main():
           f"{len(diff['still_failing'])} still failing, "
           f"{len(diff['still_passing'])} still passing")
 
-    report = build_report(args.scope, scope, curr_run, prev_run, diff)
+    errors = []
+    report = build_report(args.scope, scope, curr_run, prev_run, diff, errors)
     subject, html_body, text_body = render_email(report)
 
     if args.dry_run:
@@ -180,11 +195,17 @@ def main():
         print("=" * 72)
         print(text_body)
         print("=" * 72)
-        return
+    else:
+        from ci_tools.email_sender import send_email
+        send_email(subject, html_body, text_body)
+        print("Email sent.")
 
-    from ci_tools.email_sender import send_email
-    send_email(subject, html_body, text_body)
-    print("Email sent.")
+    if errors:
+        print(f"\nERROR: {len(errors)} non-fatal error(s) during run:",
+              file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
