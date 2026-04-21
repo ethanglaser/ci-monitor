@@ -1,0 +1,51 @@
+#===============================================================================
+# Nightly monitor — scikit-learn-intelex Azure Pipelines
+#
+# Runs daily, compares the latest nightly Azure build to the previous one,
+# attributes new regressions to commits in the window, and emails a report.
+#===============================================================================
+
+name: Nightly monitor — sklearnex Azure
+
+on:
+  schedule:
+    # Daily at 13:30 UTC (sklearnex nightly typically finishes by then).
+    - cron: "30 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    name: Run nightly monitor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run nightly monitor
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+          AZURE_DEVOPS_ORG: daal
+          AZURE_DEVOPS_PROJECT: daal4py
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python -m ci_tools.nightly.monitor --scope sklearnex-azure

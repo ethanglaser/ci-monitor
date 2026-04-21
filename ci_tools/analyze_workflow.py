@@ -10,8 +10,7 @@ import re
 import sys
 from collections import defaultdict
 
-import requests
-
+from ci_tools.bedrock import call_bedrock
 from ci_tools.log_parser import extract_error_snippet, extract_error_signatures
 from ci_tools.providers.github_actions import (
     _get as github_get,
@@ -19,16 +18,9 @@ from ci_tools.providers.github_actions import (
     get_job_logs,
 )
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-AWS_BEARER_TOKEN = os.environ["AWS_BEARER_TOKEN_BEDROCK"]
-AWS_REGION = os.environ["AWS_REGION"]
 REPO = os.environ["REPO"]
 WORKFLOW_FILE = os.environ["WORKFLOW_FILE"]
 RUN_URL = os.environ.get("RUN_URL", "")
-
-BEDROCK_MODEL = os.environ.get(
-    "BEDROCK_MODEL", "us.anthropic.claude-sonnet-4-20250514-v1:0"
-)
 
 MAX_RECENT_RUNS = 30
 MAX_BRANCH_LOG_FETCHES = 8
@@ -263,29 +255,7 @@ Please analyze:
 4. **Timeline**: Based on the run history, how long has this been happening?
 5. **Recommendation**: What should be done to resolve this?"""
 
-    url = (
-        f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com"
-        f"/model/{BEDROCK_MODEL}/converse"
-    )
-    resp = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {AWS_BEARER_TOKEN}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "system": [{"text": system_prompt}],
-            "messages": [
-                {"role": "user", "content": [{"text": user_prompt}]},
-            ],
-            "inferenceConfig": {"maxTokens": 2048},
-        },
-    )
-    if not resp.ok:
-        print(f"Bedrock API error {resp.status_code}: {resp.text}")
-        resp.raise_for_status()
-    result = resp.json()
-    return result["output"]["message"]["content"][0]["text"]
+    return call_bedrock(system_prompt, user_prompt)
 
 
 def main():

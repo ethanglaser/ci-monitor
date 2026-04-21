@@ -8,21 +8,14 @@ and uses Claude to analyze root cause. Posts findings as a PR comment.
 import os
 import sys
 
-import requests
-
+from ci_tools.bedrock import call_bedrock
 from ci_tools.log_parser import extract_error_snippet
 from ci_tools.providers import github_actions, azure_pipelines
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-AWS_BEARER_TOKEN = os.environ["AWS_BEARER_TOKEN_BEDROCK"]
-AWS_REGION = os.environ["AWS_REGION"]
 PR_NUMBER = int(os.environ["PR_NUMBER"])
 REPO = os.environ["REPO"]
 
 MAX_DIFF_CHARS = 12000
-BEDROCK_MODEL = os.environ.get(
-    "BEDROCK_MODEL", "us.anthropic.claude-sonnet-4-20250514-v1:0"
-)
 
 PROVIDERS = [github_actions, azure_pipelines]
 
@@ -83,29 +76,7 @@ Please analyze this CI failure and provide:
 4. **Relevant Code Changes**: If PR-specific, which changes in the diff likely caused it?
 5. **Recommendation**: What should the PR author do next?"""
 
-    url = (
-        f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com"
-        f"/model/{BEDROCK_MODEL}/converse"
-    )
-    resp = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {AWS_BEARER_TOKEN}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "system": [{"text": system_prompt}],
-            "messages": [
-                {"role": "user", "content": [{"text": user_prompt}]},
-            ],
-            "inferenceConfig": {"maxTokens": 2048},
-        },
-    )
-    if not resp.ok:
-        print(f"Bedrock API error {resp.status_code}: {resp.text}")
-        resp.raise_for_status()
-    result = resp.json()
-    return result["output"]["message"]["content"][0]["text"]
+    return call_bedrock(system_prompt, user_prompt)
 
 
 def format_comment(pr_number, runs, error_info, analysis, similar_failures):

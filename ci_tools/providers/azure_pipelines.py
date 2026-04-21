@@ -37,6 +37,69 @@ def _get(endpoint):
     return resp
 
 
+def get_nightly_runs(definition_id, branch="main", top=5):
+    """Recent completed builds for a pipeline definition on a branch.
+
+    Returns runs newest-first with id, url, result, timestamps, and
+    sourceVersion (commit SHA).
+    """
+    resp = _get(
+        f"/build/builds?definitions={definition_id}"
+        f"&branchName=refs/heads/{branch}"
+        f"&statusFilter=completed&$top={top}"
+    )
+    builds = resp.json().get("value", [])
+    return [
+        {
+            "id": b["id"],
+            "html_url": b.get("_links", {}).get("web", {}).get("href", ""),
+            "result": b.get("result"),
+            "status": b.get("status"),
+            "started_at": b.get("startTime", ""),
+            "finished_at": b.get("finishTime", ""),
+            "source_sha": b.get("sourceVersion", ""),
+            "source_branch": b.get("sourceBranch", ""),
+            "provider": PROVIDER_NAME,
+        }
+        for b in builds
+    ]
+
+
+def get_all_jobs(run_id):
+    """All Job records in a build's timeline with their result.
+
+    Unlike get_failed_jobs, this includes successful jobs — needed for
+    regression detection across runs.
+    """
+    resp = _get(f"/build/builds/{run_id}/timeline")
+    records = resp.json().get("records", [])
+
+    jobs = []
+    for record in records:
+        if record.get("type") != "Job":
+            continue
+        job_id = record["id"]
+        failed_step = None
+        log_id = None
+        for task in records:
+            if task.get("type") != "Task" or task.get("parentId") != job_id:
+                continue
+            if task.get("result") == "failed":
+                failed_step = task.get("name")
+                log_id = task.get("log", {}).get("id")
+                break
+        jobs.append({
+            "id": run_id,
+            "timeline_id": job_id,
+            "name": record.get("name", "Unknown"),
+            "result": record.get("result"),
+            "failed_step": failed_step,
+            "_log_id": log_id or record.get("log", {}).get("id"),
+            "provider": PROVIDER_NAME,
+        })
+    return jobs
+
+
 def get_failed_runs(repo, pr_number, head_ref):
     """Find failed Azure Pipelines builds for a PR."""
     # Azure Pipelines uses refs/pull/{number}/merge for PR builds
