@@ -65,6 +65,54 @@ def get_nightly_runs(definition_id, branch="main", top=5):
     ]
 
 
+def find_similar_nightly_failures(
+    definition_id, branch, current_run_id, job_name, current_signatures,
+    max_runs=10,
+):
+    """Scan recent nightly runs of the same pipeline for this job failing
+    with overlapping error signatures.
+
+    Returns list of dicts with {run_id, run_url, started_at, matching}.
+    Used for chronic-failure triage: "this checksum mismatch has been
+    failing for 4 days" vs. "new today".
+    """
+    from ci_tools.log_parser import extract_error_signatures, extract_error_snippet
+
+    runs = get_nightly_runs(definition_id, branch=branch, top=max_runs)
+    similar = []
+    for run in runs:
+        if run["id"] == current_run_id:
+            continue
+        try:
+            jobs = get_all_jobs(run["id"])
+        except Exception:
+            continue
+        match = next(
+            (j for j in jobs if j["name"] == job_name and j.get("result") == "failed"),
+            None,
+        )
+        if match is None:
+            continue
+        try:
+            log = get_job_logs("", run["id"], _log_id=match.get("_log_id"))
+            if len(log) < 500 and match.get("timeline_id"):
+                log = get_logs_for_job_tasks(run["id"], match["timeline_id"])
+        except Exception:
+            continue
+        other_sigs = extract_error_signatures(
+            extract_error_snippet(log, match.get("failed_step"))
+        )
+        overlap = current_signatures & other_sigs
+        if overlap:
+            similar.append({
+                "run_id": run["id"],
+                "run_url": run["html_url"],
+                "started_at": run["started_at"],
+                "matching": list(overlap)[:5],
+            })
+    return similar
+
+
 def get_logs_for_job_tasks(build_id, job_timeline_id):
     """Concatenate logs for every task under a given Job in the timeline.
 

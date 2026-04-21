@@ -16,9 +16,10 @@ For sending email (non-dry-run):
 import argparse
 import sys
 
-from ci_tools.log_parser import extract_error_snippet
+from ci_tools.log_parser import extract_error_signatures, extract_error_snippet
 from ci_tools.nightly.attribution import (
-    attribute,
+    attribute_regression,
+    deep_triage,
     get_commits_between,
     get_commits_in_window,
 )
@@ -43,14 +44,10 @@ def collect_azure_scope(scope):
     return curr_run, prev_run, curr_jobs, prev_jobs
 
 
-def _enrich_failure(job, snippet, repo_commits, upstream_commits, scope, errors):
-    """Attach snippet + commits + LLM verdict to a failing job.
-
-    Attribution failures are caught here (not in attribute() itself) so the
-    email still gets sent, but the run is flagged as errored via `errors`.
-    """
+def _enrich_regression(job, snippet, repo_commits, upstream_commits, scope, errors):
+    """Enrich a NEW regression with culprit-commit attribution."""
     try:
-        verdict = attribute(
+        verdict = attribute_regression(
             job, snippet, repo_commits, upstream_commits,
             scope["repo"], scope.get("upstream_repo"),
         )
@@ -62,6 +59,38 @@ def _enrich_failure(job, snippet, repo_commits, upstream_commits, scope, errors)
         "snippet": snippet,
         "repo_commits": repo_commits,
         "upstream_commits": upstream_commits,
+        "verdict": verdict,
+    }
+
+
+def _enrich_chronic(job, snippet, scope, current_run_id, errors):
+    """Enrich a CHRONIC failure with deep triage + similar-run history."""
+    similar = []
+    try:
+        sigs = extract_error_signatures(snippet)
+        if sigs and scope["provider"] == "azure_pipelines":
+            similar = azure_pipelines.find_similar_nightly_failures(
+                definition_id=scope["definition_id"],
+                branch=scope["branch"],
+                current_run_id=current_run_id,
+                job_name=job["name"],
+                current_signatures=sigs,
+            )
+    except Exception as e:
+        errors.append(f"similar-failure search failed for '{job['name']}': {e}")
+
+    try:
+        verdict = deep_triage(job, snippet, similar)
+    except Exception as e:
+        errors.append(f"triage failed for '{job['name']}': {e}")
+        verdict = f"(triage failed: {e})"
+
+    return {
+        "job": job,
+        "snippet": snippet,
+        "repo_commits": [],
+        "upstream_commits": [],
+        "similar": similar,
         "verdict": verdict,
     }
 
@@ -134,16 +163,15 @@ def build_report(scope_name, scope, curr_run, prev_run, diff, errors):
     for job in diff["new_failures"]:
         snippet = _fetch_snippet(job, errors)
         report["new_failures"].append(
-            _enrich_failure(job, snippet, repo_commits_narrow,
-                            upstream_commits_narrow, scope, errors)
+            _enrich_regression(job, snippet, repo_commits_narrow,
+                               upstream_commits_narrow, scope, errors)
         )
 
-    # For chronic failures we skip the commit list (we don't know when it
-    # last passed) and just summarize what's broken.
+    # Chronic failures get deep triage + history lookup across recent runs.
     for job in diff["still_failing"]:
         snippet = _fetch_snippet(job, errors)
         report["still_failing"].append(
-            _enrich_failure(job, snippet, [], [], scope, errors)
+            _enrich_chronic(job, snippet, scope, curr_run["id"], errors)
         )
 
     return report

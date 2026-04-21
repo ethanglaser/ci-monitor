@@ -58,65 +58,122 @@ def get_commits_in_window(repo, since_iso, until_iso, branch="main", max_commits
     ]
 
 
-def attribute(failure, error_snippet, repo_commits, upstream_commits, repo, upstream_repo):
-    """Ask Claude to characterize a failure.
+def _fmt_commits(commits, label):
+    if not commits:
+        return f"_No commits in {label}._"
+    lines = [f"**Commits in {label}:**"]
+    for c in commits[:20]:
+        lines.append(f"- `{c['sha']}` ({c['author']}): {c['message']}")
+    return "\n".join(lines)
 
-    With commits (new regression): try to pin to a culprit.
-    Without commits (chronic failure): just classify the error.
-    """
-    def fmt_commits(commits, label):
-        if not commits:
-            return f"_No commits in {label}._"
-        lines = [f"**Commits in {label}:**"]
-        for c in commits[:20]:
-            lines.append(f"- `{c['sha']}` ({c['author']}): {c['message']}")
-        return "\n".join(lines)
 
-    has_commits = bool(repo_commits or upstream_commits)
-    if has_commits:
-        system_prompt = (
-            "You are a CI regression triage assistant. Given a failing job's "
-            "error snippet and the list of commits merged between the last "
-            "passing run and this failing run, identify the single most likely "
-            "culprit commit. If the failure looks like infrastructure/flake "
-            "(network timeout, runner issue, transient install error) say so "
-            "instead of guessing a commit. Be concise — 3-4 sentences max."
-        )
-        commit_sections = (
-            f"### {fmt_commits(repo_commits, f'`{repo}`')}\n\n"
-            f"### {fmt_commits(upstream_commits, f'`{upstream_repo}` (upstream)') if upstream_repo else ''}"
-        )
-        task = (
-            "What's the most likely cause? Call out a specific commit SHA if "
-            "one fits, otherwise say \"infra/flake\" or \"unclear — needs "
-            "human review\"."
-        )
-    else:
-        system_prompt = (
-            "You are a CI failure triage assistant. Given a failing job's "
-            "error snippet from a chronic (long-standing) failure, classify "
-            "the root cause in 1-2 sentences: is this an upstream API change, "
-            "a numerical/assertion test failure, an environment/install "
-            "issue, or infra/flake? Quote the key error line."
-        )
-        commit_sections = ""
-        task = (
-            "Classify the failure (upstream API change / test assertion / "
-            "env issue / infra). Quote the key error line."
-        )
-
+def attribute_regression(failure, error_snippet, repo_commits,
+                         upstream_commits, repo, upstream_repo):
+    """For NEW regressions: pin to a culprit commit in the prev→curr window."""
+    system_prompt = (
+        "You are a CI regression triage assistant. Given a failing job's "
+        "error snippet and the commits merged between the last passing run "
+        "and this failing run, identify the single most likely culprit "
+        "commit. If the failure looks like infrastructure/flake say so "
+        "instead of guessing. Be concise — 3-4 sentences."
+    )
+    upstream_section = (
+        _fmt_commits(upstream_commits, f"`{upstream_repo}` (upstream)")
+        if upstream_repo else ""
+    )
     user_prompt = f"""\
 ## Failed job: {failure['name']}
 **Failed step:** {failure.get('failed_step') or 'Unknown'}
 
 ### Error snippet
 ```
-{error_snippet[:2500]}
+{error_snippet[:4000]}
 ```
 
-{commit_sections}
+### {_fmt_commits(repo_commits, f'`{repo}`')}
+
+### {upstream_section}
 
 ---
-{task}
+What's the most likely cause? Call out a specific commit SHA if one fits,
+otherwise say "infra/flake" or "unclear — needs human review".
 """
-    return call_bedrock(system_prompt, user_prompt, max_tokens=512)
+    return call_bedrock(system_prompt, user_prompt, max_tokens=768)
+
+
+def deep_triage(failure, error_snippet, similar_failures):
+    """For chronic (still-failing) jobs: structured deep analysis.
+
+    Same shape as triage_failure.py's approach: bigger snippet, 5-question
+    structured prompt, and a "similar failures in recent nightly runs"
+    section so the model knows this is long-standing, not fresh.
+    """
+    system_prompt = (
+        "You are a CI failure triage specialist analyzing a chronically "
+        "failing CI job. Read the FULL error snippet carefully. Python "
+        "tracebacks wrap the real cause — 'CellExecutionError' or "
+        "'RuntimeError' at the top is almost never the actual problem. "
+        "Find the DEEPEST exception line and quote it verbatim. "
+        "\n\nCommon failure categories:\n"
+        "1. Upstream API breakage: scikit-learn or another dep changed an "
+        "API that sklearnex uses.\n"
+        "2. Test assertion / numerical: test failure from model output "
+        "mismatch.\n"
+        "3. Data/checksum mismatch: fetched dataset hash doesn't match.\n"
+        "4. Environment/install: dependency install failure, version "
+        "conflict.\n"
+        "5. Infra/flake: network timeout, runner issue, transient.\n"
+        "\nBe specific. A checksum mismatch is NOT a 'network issue'. "
+        "Use markdown formatting."
+    )
+
+    if similar_failures:
+        history_section = (
+            "### Recent history\n"
+            "This exact error (matching signatures) has also appeared in:\n"
+        )
+        for sf in similar_failures[:5]:
+            history_section += (
+                f"- Run [{sf['run_id']}]({sf['run_url']}) "
+                f"on {sf['started_at'][:10]} "
+                f"(matched: {', '.join(sf['matching'][:2])})\n"
+            )
+    else:
+        history_section = (
+            "### Recent history\n"
+            "_No matching failures found in recent nightly runs — this "
+            "may be new to this run, or the signature has drifted._"
+        )
+
+    user_prompt = f"""\
+## Chronic failure: {failure['name']}
+**Failed step:** {failure.get('failed_step') or 'Unknown'}
+
+### Error snippet
+```
+{error_snippet[:4000]}
+```
+
+{history_section}
+
+---
+Please provide:
+
+1. **Deepest error line**: Quote the root-cause line verbatim (the innermost exception, not the wrapper).
+2. **Classification**: Which category above?
+3. **Root cause**: What's actually wrong?
+4. **How long has this been happening**: Based on the recent-history section, is this new, persistent, or intermittent?
+5. **Recommended next step**: What should someone do to fix it?
+"""
+    return call_bedrock(system_prompt, user_prompt, max_tokens=1024)
+
+
+# Backwards-compat shim: old name still works for callers that expect it.
+def attribute(failure, error_snippet, repo_commits, upstream_commits,
+              repo, upstream_repo):
+    if repo_commits or upstream_commits:
+        return attribute_regression(
+            failure, error_snippet, repo_commits, upstream_commits,
+            repo, upstream_repo,
+        )
+    return deep_triage(failure, error_snippet, [])

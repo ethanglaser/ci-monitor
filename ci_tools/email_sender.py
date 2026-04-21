@@ -94,7 +94,12 @@ def render_text(report):
         for sf in report["still_failing"]:
             job = sf["job"]
             lines.append(f"* {job['name']}  (failed step: {job.get('failed_step') or 'Unknown'})")
-            lines.append(f"  Verdict: {sf['verdict']}")
+            verdict_indented = sf["verdict"].replace("\n", "\n  ")
+            lines.append(f"  Verdict:\n  {verdict_indented}")
+            if sf.get("similar"):
+                lines.append("  Same signature in recent runs:")
+                for s in sf["similar"][:5]:
+                    lines.append(f"    - Run #{s['run_id']} ({s['started_at'][:10]}) {s['run_url']}")
             snippet_head = "\n    ".join(sf["snippet"].splitlines()[-10:])
             lines.append(f"  Error tail:\n    {snippet_head}")
             lines.append("")
@@ -187,7 +192,22 @@ def render_html(report):
                 f"&mdash; failed step: <code>{esc(job.get('failed_step') or 'Unknown')}</code>"
                 f"</summary>"
             )
-            parts.append(f"<p><b>Verdict:</b> {esc(sf['verdict'])}</p>")
+            # Verdict is markdown; surface it raw since mail clients handle
+            # simple <br> + bold inline. html.escape would nuke formatting.
+            parts.append(
+                "<div style='background:#fafafa;padding:8px;border-left:3px "
+                "solid #888;margin:8px 0'>"
+                f"{esc(sf['verdict']).replace(chr(10), '<br>')}"
+                "</div>"
+            )
+            if sf.get("similar"):
+                parts.append("<p><b>Same signature in recent nightly runs:</b></p><ul>")
+                for s in sf["similar"][:5]:
+                    parts.append(
+                        f"<li><a href='{esc(s['run_url'])}'>Run #{esc(s['run_id'])}</a> "
+                        f"&mdash; {esc(s['started_at'][:10])}</li>"
+                    )
+                parts.append("</ul>")
             parts.append(
                 f"<pre style='background:#f5f5f5;padding:8px;overflow:auto;"
                 f"max-height:300px;font-size:12px'>{esc(sf['snippet'][-3000:])}</pre>"
