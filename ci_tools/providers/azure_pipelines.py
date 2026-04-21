@@ -65,6 +65,33 @@ def get_nightly_runs(definition_id, branch="main", top=5):
     ]
 
 
+def get_logs_for_job_tasks(build_id, job_timeline_id):
+    """Concatenate logs for every task under a given Job in the timeline.
+
+    Fallback for when the job-level aggregated log is empty/missing —
+    rebuilds step-by-step output from individual task logs.
+    """
+    resp = _get(f"/build/builds/{build_id}/timeline")
+    records = resp.json().get("records", [])
+
+    chunks = []
+    for task in records:
+        if task.get("type") != "Task":
+            continue
+        if task.get("parentId") != job_timeline_id:
+            continue
+        log_id = task.get("log", {}).get("id")
+        if not log_id:
+            continue
+        try:
+            log_resp = _get(f"/build/builds/{build_id}/logs/{log_id}")
+        except requests.HTTPError:
+            continue
+        chunks.append(f"##[section] {task.get('name', 'Unknown')}")
+        chunks.append(log_resp.text)
+    return "\n".join(chunks)
+
+
 def get_all_jobs(run_id):
     """All Job records in a build's timeline with their result.
 
@@ -80,21 +107,24 @@ def get_all_jobs(run_id):
             continue
         job_id = record["id"]
         failed_step = None
-        log_id = None
+        failed_task_log_id = None
         for task in records:
             if task.get("type") != "Task" or task.get("parentId") != job_id:
                 continue
             if task.get("result") == "failed":
                 failed_step = task.get("name")
-                log_id = task.get("log", {}).get("id")
+                failed_task_log_id = task.get("log", {}).get("id")
                 break
+        # Prefer the job-level aggregated log (all steps concatenated);
+        # fall back to the failed task's log id if the job record has none.
+        job_log_id = record.get("log", {}).get("id") or failed_task_log_id
         jobs.append({
             "id": run_id,
             "timeline_id": job_id,
             "name": record.get("name", "Unknown"),
             "result": record.get("result"),
             "failed_step": failed_step,
-            "_log_id": log_id or record.get("log", {}).get("id"),
+            "_log_id": job_log_id,
             "provider": PROVIDER_NAME,
         })
     return jobs

@@ -74,6 +74,18 @@ def _fetch_snippet(job, errors):
     except Exception as e:
         errors.append(f"log fetch failed for '{job['name']}': {e}")
         log = f"(could not fetch log: {e})"
+    # If the primary log came back empty/tiny, pull every failed-task log
+    # in the job's timeline and concatenate. Azure sometimes splits output.
+    if len(log) < 500 and job.get("timeline_id"):
+        try:
+            fallback = azure_pipelines.get_logs_for_job_tasks(
+                job["id"], job["timeline_id"]
+            )
+            if len(fallback) > len(log):
+                log = fallback
+        except Exception as e:
+            errors.append(f"fallback log fetch failed for '{job['name']}': {e}")
+    print(f"  log for '{job['name']}': {len(log)} chars")
     return extract_error_snippet(log, job.get("failed_step"))
 
 
