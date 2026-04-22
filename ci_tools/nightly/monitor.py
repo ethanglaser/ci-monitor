@@ -68,7 +68,7 @@ def _enrich_chronic(job, snippet, scope, current_run_id, errors):
     similar = []
     try:
         sigs = extract_error_signatures(snippet)
-        if sigs and scope["provider"] == "azure_pipelines":
+        if scope["provider"] == "azure_pipelines":
             similar = azure_pipelines.find_similar_nightly_failures(
                 definition_id=scope["definition_id"],
                 branch=scope["branch"],

@@ -128,21 +128,51 @@ def deep_triage(failure, error_snippet, similar_failures):
     )
 
     if similar_failures:
-        history_section = (
-            "### Recent history\n"
-            "This exact error (matching signatures) has also appeared in:\n"
-        )
-        for sf in similar_failures[:5]:
-            history_section += (
-                f"- Run [{sf['run_id']}]({sf['run_url']}) "
-                f"on {sf['started_at'][:10]} "
-                f"(matched: {', '.join(sf['matching'][:2])})\n"
+        matching = [sf for sf in similar_failures if sf.get("matching")]
+        same_step = [
+            sf for sf in similar_failures
+            if not sf.get("matching") and sf.get("failed_step") == failure.get("failed_step")
+        ]
+        other = [
+            sf for sf in similar_failures
+            if not sf.get("matching") and sf.get("failed_step") != failure.get("failed_step")
+        ]
+
+        history_lines = ["### Recent history (this job in prior nightly runs)"]
+        if matching:
+            history_lines.append("\n**Same error signature** (confirmed same root cause):")
+            for sf in matching[:5]:
+                history_lines.append(
+                    f"- Run [{sf['run_id']}]({sf['run_url']}) on "
+                    f"{sf['started_at'][:10]} — matched: "
+                    f"`{', '.join(sf['matching'][:2])}`"
+                )
+        if same_step:
+            history_lines.append(
+                "\n**Same failed step** (likely same issue, sig not extractable):"
             )
+            for sf in same_step[:5]:
+                history_lines.append(
+                    f"- Run [{sf['run_id']}]({sf['run_url']}) on "
+                    f"{sf['started_at'][:10]} — step: "
+                    f"`{sf.get('failed_step') or 'Unknown'}`"
+                )
+        if other:
+            history_lines.append(
+                "\n**Job failed for a different reason** (different step):"
+            )
+            for sf in other[:5]:
+                history_lines.append(
+                    f"- Run [{sf['run_id']}]({sf['run_url']}) on "
+                    f"{sf['started_at'][:10]} — step: "
+                    f"`{sf.get('failed_step') or 'Unknown'}`"
+                )
+        history_section = "\n".join(history_lines)
     else:
         history_section = (
             "### Recent history\n"
-            "_No matching failures found in recent nightly runs — this "
-            "may be new to this run, or the signature has drifted._"
+            "_This job has not failed in the last ~10 nightly runs — "
+            "this failure is new or rare._"
         )
 
     user_prompt = f"""\
@@ -162,7 +192,7 @@ Please provide:
 1. **Deepest error line**: Quote the root-cause line verbatim (the innermost exception, not the wrapper).
 2. **Classification**: Which category above?
 3. **Root cause**: What's actually wrong?
-4. **How long has this been happening**: Based on the recent-history section, is this new, persistent, or intermittent?
+4. **How long has this been happening**: Use the recent-history section. "Same error signature" → persistent same root cause. "Same failed step" (no signature match) → likely same issue but signatures aren't extractable (common for non-Python failures like Coverity or shell scripts — do NOT call it "new" just because signatures didn't match). "Different reason" → job is flaky across multiple issues. No history → new/rare.
 5. **Recommended next step**: What should someone do to fix it?
 """
     return call_bedrock(system_prompt, user_prompt, max_tokens=1024)

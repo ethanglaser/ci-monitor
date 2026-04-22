@@ -69,12 +69,14 @@ def find_similar_nightly_failures(
     definition_id, branch, current_run_id, job_name, current_signatures,
     max_runs=10,
 ):
-    """Scan recent nightly runs of the same pipeline for this job failing
-    with overlapping error signatures.
+    """Scan recent nightly runs of the same pipeline for this job failing.
 
-    Returns list of dicts with {run_id, run_url, started_at, matching}.
-    Used for chronic-failure triage: "this checksum mismatch has been
-    failing for 4 days" vs. "new today".
+    Returns list of dicts {run_id, run_url, started_at, matching, failed_step}
+    for every recent run where this job name was `failed`, regardless of
+    whether signatures could be extracted. When signatures DO overlap with
+    `current_signatures`, they're included in `matching` so the triage
+    prompt can distinguish "same root cause" from "just the same job
+    failing for different reasons each night".
     """
     from ci_tools.log_parser import extract_error_signatures, extract_error_snippet
 
@@ -93,23 +95,27 @@ def find_similar_nightly_failures(
         )
         if match is None:
             continue
-        try:
-            log = get_job_logs("", run["id"], _log_id=match.get("_log_id"))
-            if len(log) < 500 and match.get("timeline_id"):
-                log = get_logs_for_job_tasks(run["id"], match["timeline_id"])
-        except Exception:
-            continue
-        other_sigs = extract_error_signatures(
-            extract_error_snippet(log, match.get("failed_step"))
-        )
-        overlap = current_signatures & other_sigs
-        if overlap:
-            similar.append({
-                "run_id": run["id"],
-                "run_url": run["html_url"],
-                "started_at": run["started_at"],
-                "matching": list(overlap)[:5],
-            })
+
+        matching = []
+        if current_signatures:
+            try:
+                log = get_job_logs("", run["id"], _log_id=match.get("_log_id"))
+                if len(log) < 500 and match.get("timeline_id"):
+                    log = get_logs_for_job_tasks(run["id"], match["timeline_id"])
+                other_sigs = extract_error_signatures(
+                    extract_error_snippet(log, match.get("failed_step"))
+                )
+                matching = list(current_signatures & other_sigs)[:5]
+            except Exception:
+                pass
+
+        similar.append({
+            "run_id": run["id"],
+            "run_url": run["html_url"],
+            "started_at": run["started_at"],
+            "failed_step": match.get("failed_step"),
+            "matching": matching,
+        })
     return similar
 
 
